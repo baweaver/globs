@@ -86,10 +86,8 @@ module Globs
         expressions  = interpret_expression(string[start..finish])
       end
 
-      resulting_expressions = expressions.map { |exp| non_glob_str + exp }
-
       results = results.flat_map { |res|
-        resulting_expressions.map { |exp| res + exp }
+        expressions.map { |exp| "#{res}#{non_glob_str}#{exp}" }
       }
     end
 

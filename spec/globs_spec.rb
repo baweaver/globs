@@ -32,7 +32,7 @@ RSpec.describe Globs do
 
   it 'can expand a range' do
     expect(
-      Globs.expand('test.{a..c}.{1..2}.com')
+      Globs.expand('test.{a..c}.{1, 2}.com')
     ).to eq(%w(
       test.a.1.com
       test.a.2.com
