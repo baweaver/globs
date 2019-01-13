@@ -3,19 +3,31 @@ require "globs/version"
 # Container for Globs methods, currently only static as the public api
 # footprint is relatively small.
 #
-# It should be noted that I'll be exceptionally verbose in the comments
-# of this code as it's an interesting usecase for learning to combine
-# map, flat_map, and reduce for permutation-type generators.
-#
-# More than likely I'll write a tutorial on how the code works later and
-# link to it in these comments for the exceptionally curious. It'd be roughly
-# a 2.5 / 5 for difficulty.
-#
 # @author baweaver
 # @since 0.0.1
 #
 module Globs
   extend self
+
+  # Opening brace of a Glob expression
+  OPENING_BRACE         = /\{/
+
+  # Closing brace of a Glob expression
+  CLOSING_BRACE         = /\}/
+
+  # StringScanner is not 0 indexed. Offset for index.
+  SCANNER_INDEX_OFFSET  = 1
+
+  # We don't want to include the brace in our final set, so offset the index
+  # to compensate
+  BRACE_POSITION_OFFSET = 1
+
+  # Full positional offset for the braces and scanner's non-zero index
+  POSITION_OFFSET       = SCANNER_INDEX_OFFSET + BRACE_POSITION_OFFSET
+
+  # End of the string position, used to clarify difference between
+  # explicit EOS and positional offsets
+  END_OF_STRING         = -1
 
   # Shorthand for `puts expand(str)` for outputting to STDOUT for
   # unix-like piping.
@@ -36,6 +48,9 @@ module Globs
   #
   # @since 0.0.1
   #
+  # @note
+  #   Modified to use StringScanner in 0.0.3 for more accurate tokenization
+  #
   # @example
   #
   #   ```
@@ -43,38 +58,91 @@ module Globs
   #   => ["test.a.1.com", "test.a.2.com", "test.b.1.com", "test.b.2.com"]
   #   ```
   #
-  # @note
-  #   While this _could_ be made into a tokenization type process for speed
-  #   reasons there's very little reason to do so immediately. The current
-  #   implementation is far more proof of concept than anything.
-  #
-  #   If speed needs to happen to arise from usage, PRs are welcome to
-  #   optimize this method, but the public api should remain the same.
-  #
   # @param string [String]
   #   Glob-like string to be expanded
   #
   # @return [Array[String]]
   #   All expansions of the glob-like string
   def expand(string)
-    string
-      .split(/\{|\}/)
-      .map { |cs| interpret_glob_set(cs.split(/, */)) }
-      .reduce { |sets, cs|
-        sets.flat_map { |s| cs.map { |c| s + c } }
+    scanner = StringScanner.new(string)
+    results = ['']
+
+    until scanner.eos?
+      beginning     = scanner.pos
+      start, finish = next_expression_positions!(scanner)
+
+      # There are no further expressions in the string if the start position is
+      # negative.
+      #
+      # Proceed to move the scanner's cursor to the end of the string and take
+      # the rest of the string to append to the current result items.
+      if start.negative?
+        scanner.pos  = string.size
+
+        non_glob_str = string[beginning..END_OF_STRING]
+        expressions  = ['']
+      else
+        non_glob_str = string[beginning..(start - POSITION_OFFSET)]
+        expressions  = interpret_expression(string[start..finish])
+      end
+
+      resulting_expressions = expressions.map { |exp| non_glob_str + exp }
+
+      results = results.flat_map { |res|
+        resulting_expressions.map { |exp| res + exp }
       }
+    end
+
+    results
   end
 
-  # Interprets a set of glob expressions, looking for items like ranges. When
-  # it finds such an item, it expands the range into an array to flatten into
-  # the set of possible values for a section.
+  # Finds the beginning and end of the next expression set in the string. If
+  # an expression set is not found, it will return END_OF_STRING for either
+  # of the positions being absent.
   #
-  # @param set [Array[String]]
-  #   Unexpanded glob set
+  # @since 0.0.3
+  #
+  # @mutates
+  #
+  # @note
+  #   This will mutate the given StringScanner and cause it to move its
+  #   associated cursor to the end of the last-found expression.
+  #
+  #   If an expression is not found, it will register the last known beginning
+  #   position, as `scan_until` will simply return nil and not change the
+  #   cursor position if something is not found.
+  #
+  # @param scanner [StringScanner]
+  #   Current StringScanner being used to tokenize and scan the glob expression
+  #   string
+  #
+  # @return [Array[Integer, Integer]]
+  #   Starting and ending positions of the next expression, excluding braces
+  private def next_expression_positions!(scanner)
+    return [END_OF_STRING, END_OF_STRING] unless scanner.scan_until(OPENING_BRACE)
+    start = scanner.pos
+
+    return [start, END_OF_STRING] unless scanner.scan_until(CLOSING_BRACE)
+    finish = scanner.pos
+
+    [start, finish - POSITION_OFFSET]
+  end
+
+  # Interprets a glob expression to extract permutatable items from it.
+  #
+  # @since 0.0.3
+  #
+  # @param string [String]
+  #   String to interpret as a glob expression
   #
   # @return [Array[String]]
-  #   Fully expanded glob sets
-  private def interpret_glob_set(set)
-    set.flat_map { |s| s.include?('..') ? Range.new(*s.split('..')).to_a : s }
+  #   Collection of permutable strings to iterate over when constructing a
+  #   final glob set
+  private def interpret_expression(string)
+    string
+      .split(/, */)
+      .flat_map { |exp|
+        exp.include?('..') ? Range.new(*exp.split('..')).to_a : exp
+      }
   end
 end
